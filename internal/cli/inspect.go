@@ -1,26 +1,28 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/spf13/cobra"
 )
 
 var inspectCmd = &cobra.Command{
-	Use:   "inspect [file]",
-	Short: "Inspect individual chunks in an ArrowPipe file",
-	Args:  cobra.ExactArgs(1),
+	Use:   "inspect",
+	Short: "Inspect individual chunks in an ArrowPipe data",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		file, err := os.Open(args[0])
+		data, err := io.ReadAll(cmd.InOrStdin())
 		if err != nil {
-			return fmt.Errorf("error opening file: %w", err)
+			return fmt.Errorf("error reading input: %w", err)
 		}
-		defer file.Close()
 
-		ipcReader, err := ipc.NewReader(file)
+		if len(data) == 0 {
+			return fmt.Errorf("no input data")
+		}
+
+		ipcReader, err := ipc.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return fmt.Errorf("error creating ipc reader: %w", err)
 		}

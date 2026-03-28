@@ -34,34 +34,44 @@ func runFromJSON(in io.Reader, out io.Writer) error {
 		return fmt.Errorf("expected JSON array: %w", err)
 	}
 
+	// First pass: read all records and collect field order from first record
 	var records []map[string]interface{}
+	var fieldOrder []string
+	fieldTypes := make(map[string]arrow.DataType)
+
 	for dec.More() {
 		var r map[string]interface{}
 		if err := dec.Decode(&r); err != nil {
 			return fmt.Errorf("error decoding JSON record: %w", err)
 		}
 		records = append(records, r)
+
+		// Collect field order from first record only
+		if len(records) == 1 {
+			for k, v := range r {
+				fieldOrder = append(fieldOrder, k)
+				switch v.(type) {
+				case float64:
+					fieldTypes[k] = arrow.PrimitiveTypes.Float64
+				case string:
+					fieldTypes[k] = arrow.BinaryTypes.String
+				case bool:
+					fieldTypes[k] = arrow.FixedWidthTypes.Boolean
+				default:
+					return fmt.Errorf("unsupported data type in JSON: %T for key %s", v, k)
+				}
+			}
+		}
 	}
 
 	if len(records) == 0 {
 		return nil // Nothing to do
 	}
 
-	// Infer schema from the first record
-	fields := make([]arrow.Field, 0, len(records[0]))
-	for k, v := range records[0] {
-		var dt arrow.DataType
-		switch v.(type) {
-		case float64:
-			dt = arrow.PrimitiveTypes.Float64
-		case string:
-			dt = arrow.BinaryTypes.String
-		case bool:
-			dt = arrow.FixedWidthTypes.Boolean
-		default:
-			return fmt.Errorf("unsupported data type in JSON: %T for key %s", v, k)
-		}
-		fields = append(fields, arrow.Field{Name: k, Type: dt})
+	// Build fields in consistent order
+	fields := make([]arrow.Field, len(fieldOrder))
+	for i, name := range fieldOrder {
+		fields[i] = arrow.Field{Name: name, Type: fieldTypes[name]}
 	}
 	schema := arrow.NewSchema(fields, nil)
 
