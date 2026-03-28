@@ -1,10 +1,10 @@
 package engine
 
 import (
-	"context"
+	"fmt"
+
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/compute"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
@@ -31,16 +31,67 @@ func Select(rec arrow.Record, cols ...string) arrow.Record {
 }
 
 func Filter(rec arrow.Record, filter arrow.Array) (arrow.Record, error) {
-	ctx := compute.WithAllocator(context.Background(), memory.DefaultAllocator)
-	result, err := compute.Filter(ctx,
-		compute.NewDatum(rec),
-		compute.NewDatum(filter),
-		compute.FilterOptions{})
-
-	if err != nil {
-		return nil, err
+	boolFilter, ok := filter.(*array.Boolean)
+	if !ok {
+		return nil, fmt.Errorf("filter must be a boolean array")
 	}
-	defer result.Release()
 
-	return result.(*compute.RecordDatum).Value, nil
+	mem := memory.NewGoAllocator()
+	numRows := 0
+	for i := 0; i < boolFilter.Len(); i++ {
+		if !boolFilter.IsNull(i) && boolFilter.Value(i) {
+			numRows++
+		}
+	}
+
+	if numRows == 0 {
+		return nil, fmt.Errorf("filter resulted in zero rows")
+	}
+
+	cols := make([]arrow.Array, rec.NumCols())
+	fields := make([]arrow.Field, rec.NumCols())
+
+	for i, col := range rec.Columns() {
+		fields[i] = rec.Schema().Field(i)
+		bldr := array.NewBuilder(mem, col.DataType())
+		defer bldr.Release()
+
+		switch b := bldr.(type) {
+		case *array.Int64Builder:
+			typedCol := col.(*array.Int64)
+			for j := 0; j < typedCol.Len(); j++ {
+				if !boolFilter.IsNull(j) && boolFilter.Value(j) {
+					b.Append(typedCol.Value(j))
+				}
+			}
+		case *array.Float64Builder:
+			typedCol := col.(*array.Float64)
+			for j := 0; j < typedCol.Len(); j++ {
+				if !boolFilter.IsNull(j) && boolFilter.Value(j) {
+					b.Append(typedCol.Value(j))
+				}
+			}
+		case *array.StringBuilder:
+			typedCol := col.(*array.String)
+			for j := 0; j < typedCol.Len(); j++ {
+				if !boolFilter.IsNull(j) && boolFilter.Value(j) {
+					b.Append(typedCol.Value(j))
+				}
+			}
+		case *array.BooleanBuilder:
+			typedCol := col.(*array.Boolean)
+			for j := 0; j < typedCol.Len(); j++ {
+				if !boolFilter.IsNull(j) && boolFilter.Value(j) {
+					b.Append(typedCol.Value(j))
+				}
+			}
+		default:
+			return nil, fmt.Errorf("unsupported column type: %s", col.DataType())
+		}
+		cols[i] = bldr.NewArray()
+		defer cols[i].Release()
+	}
+
+	newSchema := arrow.NewSchema(fields, nil)
+	return array.NewRecord(newSchema, cols, int64(numRows)), nil
 }

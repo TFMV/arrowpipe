@@ -2,72 +2,86 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/TFMV/arrowpipe/internal/engine"
 	"github.com/TFMV/arrowpipe/internal/storage"
-	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/spf13/cobra"
 )
 
 var filterCmd = &cobra.Command{
-	Use:   "filter [input]",
+	Use:   "filter",
 	Short: "Filter rows by condition",
-	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		inputPath := args[0]
 		expr, _ := cmd.Flags().GetString("expr")
 
-		inFile, err := os.Open(inputPath)
-		if err != nil {
-			return err
-		}
-		defer inFile.Close()
+		var inReader io.Reader = cmd.InOrStdin()
+		var err error
 
-		reader, err := storage.NewColumnarDatasetReader(inFile)
+		if len(args) > 0 {
+			inputPath := args[0]
+			var inFile *os.File
+			inFile, err = os.Open(inputPath)
+			if err != nil {
+				return fmt.Errorf("error opening input file: %w", err)
+			}
+			defer inFile.Close()
+			inReader = inFile
+		}
+
+		reader, err := storage.NewColumnarDatasetReaderFromReader(inReader)
 		if err != nil {
-			return err
+			return fmt.Errorf("error creating reader: %w", err)
 		}
 		defer reader.Close()
 
 		rec, err := reader.Read()
 		if err != nil {
-			return err
+			return fmt.Errorf("error reading record: %w", err)
 		}
 		defer rec.Release()
 
+		if rec.NumRows() == 0 {
+			return nil
+		}
+
 		predicate, err := engine.NewPredicate(expr)
 		if err != nil {
-			return err
+			return fmt.Errorf("error parsing expression: %w", err)
 		}
 
 		filter, err := predicate.Eval(rec)
 		if err != nil {
-			return err
+			return fmt.Errorf("error evaluating filter: %w", err)
 		}
 		defer filter.Release()
 
 		filtered, err := engine.Filter(rec, filter)
 		if err != nil {
-			return err
+			return fmt.Errorf("error filtering: %w", err)
 		}
 		defer filtered.Release()
 
-		writer, err := array.NewRecordReader(filtered.Schema(), []arrow.Record{filtered})
-		if err != nil {
-			return err
+		if filtered.NumRows() == 0 {
+			return nil
 		}
-		defer writer.Release()
 
-		fmt.Println(writer)
+		writer, err := storage.NewWriter(cmd.OutOrStdout(), filtered.Schema())
+		if err != nil {
+			return fmt.Errorf("error creating writer: %w", err)
+		}
 
-		return nil
+		if err := writer.Write(filtered); err != nil {
+			return fmt.Errorf("error writing output: %w", err)
+		}
+
+		return writer.Close()
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(filterCmd)
-	filterCmd.Flags().String("expr", "", "Filter expression (e.g., 'age > 30')")
+	filterCmd.Flags().String("expr", "", "Filter expression (e.g., 'age > 30' or \"name == 'test'\")")
 	filterCmd.MarkFlagRequired("expr")
 }

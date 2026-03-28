@@ -87,7 +87,7 @@ func TestColumnsCmd_Dataset(t *testing.T) {
 
 	buf := new(bytes.Buffer)
 	rootCmd.SetOut(buf)
-	rootCmd.SetArgs([]string{"columns", dir})
+	rootCmd.SetArgs([]string{"columns", "--list", dir})
 	err = rootCmd.Execute()
 	assert.NoError(t, err)
 

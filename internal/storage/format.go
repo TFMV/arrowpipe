@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"sync"
 
@@ -48,6 +50,17 @@ func NewColumnarDatasetReader(rs ipc.ReadAtSeeker) (*ColumnarDataset, error) {
 		reader:     r,
 		nextRecord: 0,
 	}, nil
+}
+
+// NewColumnarDatasetReaderFromReader creates a new ColumnarDataset for reading from any io.Reader.
+func NewColumnarDatasetReaderFromReader(r io.Reader) (*ColumnarDataset, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("error reading data: %w", err)
+	}
+
+	rs := bytes.NewReader(data)
+	return NewColumnarDatasetReader(rs)
 }
 
 func (cd *ColumnarDataset) Write(rec arrow.Record) error {
